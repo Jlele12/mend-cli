@@ -77,6 +77,21 @@ class Tree {
   get(p: string): string | null {
     return this.now.has(p) ? this.now.get(p)! : this.original(p);
   }
+  /** The pending changes, to hand back to `restore` when one edit fails. */
+  snapshot(): [string, string | null][] {
+    return [...this.now];
+  }
+  restore(s: [string, string | null][]): void {
+    this.now.clear();
+    for (const [k, v] of s) this.now.set(k, v);
+  }
+}
+
+/** How many times `needle` occurs in `haystack`, overlapping ones included. */
+function countOccurrences(haystack: string, needle: string): number {
+  let n = 0;
+  for (let k = haystack.indexOf(needle); k >= 0; k = haystack.indexOf(needle, k + 1)) n += 1;
+  return n;
 }
 
 type Move = [string, string];
@@ -101,18 +116,19 @@ function findMatches(lines: string[], O: string[], strict: boolean, filter?: (po
     const positions: number[] = [];
     for (let pos = 0; pos + O.length <= lines.length; pos += 1) {
       if (filter !== undefined && !filter(pos)) continue;
-      let ok = true;
-      for (let i = 0; i < O.length; i += 1) {
-        if (!lineEq(O[i]!, lines[pos + i]!, t)) {
-          ok = false;
-          break;
-        }
-      }
-      if (ok) positions.push(pos);
+      if (equalAt(lines, O, pos, t)) positions.push(pos);
     }
     if (positions.length > 0) return { tier: t, positions };
   }
   return null;
+}
+
+/** Whether `lines[pos + i]` equals `O[i]` at tier `t`, for every i (SPEC.md section 5). */
+function equalAt(lines: string[], O: string[], pos: number, t: number): boolean {
+  for (let i = 0; i < O.length; i += 1) {
+    if (!lineEq(O[i]!, lines[pos + i]!, t)) return false;
+  }
+  return true;
 }
 
 /** Re-indent one line of N at tier 2 (SPEC.md section 5). */
@@ -651,8 +667,7 @@ function jsonEdit(v: unknown): Edit | null {
       const lf = (s: string): string => (crlf ? s.replaceAll('\r\n', '\n') : s);
       const t = lf(before);
       const old = lf(oldStr);
-      let count = 0;
-      for (let k = t.indexOf(old); k >= 0; k = t.indexOf(old, k + 1)) count += 1;
+      const count = countOccurrences(t, old);
       if (count === 0) throw new Fail('no-match', p);
       if (count > 1) throw new Fail('ambiguous', p);
       const at = t.indexOf(old);
@@ -766,13 +781,12 @@ function run(args: string[]): { code: number; out: string[] } {
   const moves: Move[] = [];
   const fails: Fail[] = [];
   for (const edit of edits) {
-    const before = new Map(tree.now);
+    const before = tree.snapshot();
     try {
       edit(tree, moves);
     } catch (e) {
       if (!(e instanceof Fail)) throw e;
-      tree.now.clear();
-      for (const [k, v] of before) tree.now.set(k, v);
+      tree.restore(before);
       fails.push(e);
     }
   }
